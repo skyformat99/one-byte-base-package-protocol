@@ -1,10 +1,10 @@
-#include <package.h>
+#include <cmd.h>
 
 static unsigned char send_buf[SEND_BUF_SIZE]; //发送缓存，包含了包头、长度和数据包
 static unsigned int send_buf_len;
 static unsigned char package_buf[PACKAGE_BUF_SIZE]; //接收到的包缓冲区，仅包含数据包，不包含包头和长度
 
-static void (*package_call_back)(unsigned char *p, unsigned int len);  //数据包回调函数，当分析到数据包时回调此函数
+static void (*cmd_call_back)(unsigned int cmd, unsigned int len, unsigned char *p);
 
 
 /*********************** 串口接口函数 ******************/
@@ -31,52 +31,88 @@ static void package_send_buf()
 }
 
 /************************** 接口函数 ******************************/
-void package_set_call_back(void (*f)(unsigned char *p, unsigned int len))  //设置回调函数
-        //函数格式必须是 void func(unsigned char *p, unsigned int len)
-        //当检测到数据包时会回调此函数，p是数据包位置，len是数据包长度，在回调函数中对数据包处理
+void cmd_set_call_back(void (*f)(unsigned int cmd, unsigned int len, unsigned char *dat))
+        //当检测到cmd包时就会回调这里设置的函数
 {
-    package_call_back = f;
+    cmd_call_back = f;
 }
-void package_send(unsigned char *dat, unsigned int len) //发送指定长度数据包
+void cmd_send_cmd(unsigned int cmd, unsigned int len, unsigned char *dat)       //发送一个指令包
 {
-    unsigned char len0, len1;
-    unsigned int i;
-    //包头
-    send_buf_clean();
-    send_buf_add(ESC);
-    send_buf_add(HEAD);
-    //包长度
-    len1 = (unsigned char)(len>>8);     //高8位
-    len0 = (unsigned char)(len);        //低8位
-    if(len1==ESC) {     //表示数据就是ESC
+    {   //数据包的包头和长度部分
+        unsigned int package_len;       //数据包的长度
+        unsigned char len0, len1;
+        //包头
+        send_buf_clean();
         send_buf_add(ESC);
-        send_buf_add(DAT);
-    } else {
-        send_buf_add(len1);
-    }
-    if(len0==ESC) {     //表示数据就是ESC
-        send_buf_add(ESC);
-        send_buf_add(DAT);
-    } else {
-        send_buf_add(len0);
-    }
-    //数据包
-    for(i=0;i<len;i++) {
-        if(dat[i] == ESC) {     //数据就是ESC
+        send_buf_add(HEAD);
+        //包长度
+        package_len = len+4;    //上面传入的len是指令中的数据的长度，整个数据包长度还要加上cmd和len长度
+        len1 = (unsigned char)(package_len>>8);     //高8位
+        len0 = (unsigned char)(package_len);        //低8位
+        if(len1==ESC) {     //表示数据就是ESC
             send_buf_add(ESC);
             send_buf_add(DAT);
         } else {
-            send_buf_add(dat[i]);
+            send_buf_add(len1);
+        }
+        if(len0==ESC) {     //表示数据就是ESC
+            send_buf_add(ESC);
+            send_buf_add(DAT);
+        } else {
+            send_buf_add(len0);
+        }
+    }
+    {   //数据包部分，包含了cmd+len+dat
+        unsigned char cmd0, cmd1, len0, len1;
+        unsigned int i;
+        //发送cmd
+        cmd1 = (unsigned char)(cmd>>8); //cmd高8位
+        cmd0 = (unsigned char)(cmd);    //cmd低8位
+        if(cmd1==ESC) {
+            send_buf_add(ESC);
+            send_buf_add(DAT);
+        } else {
+            send_buf_add(cmd1);
+        }
+        if(cmd0==ESC) {
+            send_buf_add(ESC);
+            send_buf_add(DAT);
+        } else {
+            send_buf_add(cmd0);
+        }
+        //发送len
+        len1 = (unsigned char)(len>>8); //len高8位
+        len0 = (unsigned char)(len);    //len低8位
+        if(len1==ESC) {
+            send_buf_add(ESC);
+            send_buf_add(DAT);
+        } else {
+            send_buf_add(len1);
+        }
+        if(len0==ESC) {
+            send_buf_add(ESC);
+            send_buf_add(DAT);
+        } else {
+            send_buf_add(len0);
+        }
+        //发送数据
+        for(i=0;i<len;i++) {
+            if(dat[i] == ESC) {
+                send_buf_add(ESC);
+                send_buf_add(DAT);
+            } else {
+                send_buf_add(dat[i]);
+            }
         }
     }
     //执行发送
     package_send_buf();
 }
-void package_get_byte(unsigned char get)
+void cmd_get_byte(unsigned char get)
 /*接收到的数据传给这个函数，
     可以是串口中断直接调用此函数，但这样可能会导致数据丢失（下个字节到来了还没有处理完）；
     也可以是DMA接收，接收之后迭代进此函数，推荐这种方法。
-  此函数会解析数据，当解析到完整的数据包时会回调 package_set_call_back 设置好的函数 */
+  此函数会解析数据，当解析到完整的指令包时会回调 cmd_set_call_back 设置好的函数 */
 {
     static int step=0;  /*
                           0-没检测到包头，当前等待包头
@@ -172,21 +208,24 @@ void package_get_byte(unsigned char get)
         }
         //判断是否接收完毕
         if(count == len) {      //接收完毕，数据在package_buf，长度是len，回调函数
-            package_call_back(package_buf, len);
+            //到这里接收到的是完整的数据包，下面解析成指令包形式传给回调函数
+            unsigned int cmd, length;
+            cmd = (((unsigned int)(package_buf[0]))<<8) + ((unsigned int)(package_buf[1]));
+            length = (((unsigned int)(package_buf[2]))<<8) + ((unsigned int)(package_buf[3]));
+            cmd_call_back(cmd, length, &package_buf[4]);            
             step = 0;
             flag_esc = 0;
         }
         break;
     }
 }
-void package_get_buf(unsigned char *p, unsigned int len)
-  /* 上面的package_get需要依次把接收到的各个数据传入，有时候有一个buf的话就要写一个循环，比较麻烦。
-     这里直接提供这个方法，传入buf，自动迭代。   */
+void cmd_get_buf(unsigned char *p, unsigned int len)
 {
     unsigned int i;
     for(i=0;i<len;i++) {
-        package_get_byte(p[i]);
+        cmd_get_byte(p[i]);
     }
 }
+
 
 

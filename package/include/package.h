@@ -40,7 +40,7 @@ void package_send(unsigned char *dat, unsigned int len); //发送指定长度数
     可以是串口中断直接调用此函数，但这样可能会导致数据丢失（下个字节到来了还没有处理完）；
     也可以是DMA接收，接收之后迭代进此函数，推荐这种方法。
   此函数会解析数据，当解析到完整的数据包时会回调 package_set_call_back 设置好的函数 */
-void package_get(unsigned char get);
+void package_get_byte(unsigned char get);
 
 /* 上面的package_get需要依次把接收到的各个数据传入，有时候有一个buf的话就要写一个循环，比较麻烦。
    这里直接提供这个方法，传入buf，自动迭代。   */
