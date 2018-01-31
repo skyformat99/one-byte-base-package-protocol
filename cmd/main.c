@@ -9,8 +9,9 @@ void cmd_call_back(unsigned int cmd, unsigned int len, unsigned char *dat)
 {
     unsigned int i;
     printf("%s\n", __func__);
-    printf("cmd is 0x%4x\nlen is 0x%4x\n", cmd, len);
+    printf("cmd is 0x%4x\nlen is %d\n", cmd, len);
     for(i=0;i<len;i++) {
+        if(i%16==0) printf("\n");
         printf("%2x ", dat[i]);
     }
     printf("\n");
